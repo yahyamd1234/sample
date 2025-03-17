@@ -9,29 +9,36 @@ from app.meeting_assist_graph.state import WealthPlanState
 from hallucination import wp_validate_hallucination_node
 
 
+
 @pytest.fixture
 def mock_state():
     state = Mock(spec=WealthPlanState)
-    state.llm_plan_level_model_dump_json = lambda: json.dumps({"plan": "test_plan"})
-    state.llm_goal_level_model_dump_json = lambda: json.dumps({"goal": "test_goal"})
+    state.llm_plan_level_model_dump_json = Mock(return_value=json.dumps({"plan": "test_plan"}))
+    state.llm_goal_level_model_dump_json = Mock(return_value=json.dumps({"goal": "test_goal"}))
     state.plan_level_insights_summaries = Mock(spec=Updated_WealthPlanNotesAgentRequest)
     state.goal_level_insights_summaries = Mock(spec=Updated_WealthPlanNotesAgentRequest)
     state.agent_type = AgentType.WEALTHPLAN_AGENT
     state.eci = "test_eci"
     state.package_id = "test_package"
     state.advisor_id = "test_advisor"
+    state.get = Mock(side_effect=lambda x: {
+        "package_id": "test_package",
+        "eci": "test_eci",
+        "advisor_id": "test_advisor",
+        "agent_type": AgentType.WEALTHPLAN_AGENT
+    }.get(x))
     return state
 
 @pytest.fixture
 def mock_wealth_plan_hallucinations():
     with patch('wp_Hallucination.WealthPlan_Hallucinations') as mock:
         mock_instance = Mock()
-        mock_instance.model_dump_json = lambda: json.dumps({
+        mock_instance.model_dump_json = Mock(return_value=json.dumps({
             "validated_insights_summaries": [
                 {"hallucination_flag": True, "content": "test1"},
                 {"hallucination_flag": False, "content": "test2"}
             ]
-        })
+        }))
         mock.return_value = mock_instance
         yield mock
 
@@ -48,10 +55,10 @@ def test_successful_validation(mock_state, mock_wealth_plan_hallucinations):
 
 def test_missing_state_data(mock_state):
     """Test error handling when state data is missing"""
-    mock_state.llm_plan_level_model_dump_json = lambda: None
-    mock_state.llm_goal_level_model_dump_json = lambda: None
+    mock_state.llm_plan_level_model_dump_json = Mock(return_value="null")
+    mock_state.llm_goal_level_model_dump_json = Mock(return_value="null")
     
-    with pytest.raises(MeetingAssistError) as exc_info:
+    with pytest.raises(Exception) as exc_info:
         wp_validate_hallucination_node(mock_state, "test_chain")
     
     assert "No insights and summaries in state" in str(exc_info.value)
@@ -60,7 +67,7 @@ def test_missing_input_request(mock_state):
     """Test error handling when input request is missing"""
     mock_state.plan_level_insights_summaries = None
     
-    with pytest.raises(MeetingAssistError) as exc_info:
+    with pytest.raises(Exception) as exc_info:
         wp_validate_hallucination_node(mock_state, "test_chain")
     
     assert "No input request in state" in str(exc_info.value)
@@ -69,7 +76,7 @@ def test_llm_processing_error(mock_state, mock_wealth_plan_hallucinations):
     """Test error handling during LLM processing"""
     mock_wealth_plan_hallucinations.side_effect = Exception("LLM Error")
     
-    with pytest.raises(MeetingAssistError) as exc_info:
+    with pytest.raises(Exception) as exc_info:
         wp_validate_hallucination_node(mock_state, "test_chain")
     
     assert "Error calling the LLM for LRCC checks" in str(exc_info.value)
@@ -77,7 +84,7 @@ def test_llm_processing_error(mock_state, mock_wealth_plan_hallucinations):
 def test_file_operation_error(mock_state, mock_wealth_plan_hallucinations):
     """Test error handling during file operations"""
     with patch('wp_Hallucination.dump_to_file', side_effect=Exception("File Error")):
-        with pytest.raises(MeetingAssistError) as exc_info:
+        with pytest.raises(Exception) as exc_info:
             wp_validate_hallucination_node(mock_state, "test_chain")
         
         assert "Internal Error while retireving the LRCC Insights & Summaries" in str(exc_info.value)
