@@ -8,6 +8,7 @@ from app.meeting_assist_graph.schemas.input import Updated_WealthPlanNotesAgentR
 from app.meeting_assist_graph.state import WealthPlanState
 from hallucination import wp_validate_hallucination_node
 
+
 @pytest.fixture
 def mock_state():
     state = Mock(spec=WealthPlanState)
@@ -23,7 +24,7 @@ def mock_state():
 
 @pytest.fixture
 def mock_wealth_plan_hallucinations():
-    with patch('hallucination.WealthPlan_Hallucinations') as mock:
+    with patch('wp_Hallucination.WealthPlan_Hallucinations') as mock:
         mock_instance = Mock()
         mock_instance.model_dump_json = lambda: json.dumps({
             "validated_insights_summaries": [
@@ -36,8 +37,8 @@ def mock_wealth_plan_hallucinations():
 
 def test_successful_validation(mock_state, mock_wealth_plan_hallucinations):
     """Test successful validation of hallucinations"""
-    with patch('hallucination.dump_to_file') as mock_dump, \
-         patch('hallucination.write_logs_to_rds') as mock_write:
+    with patch('wp_Hallucination.dump_to_file') as mock_dump, \
+         patch('wp_Hallucination.write_logs_to_rds') as mock_write:
         
         result = wp_validate_hallucination_node(mock_state, "test_chain")
         
@@ -75,7 +76,7 @@ def test_llm_processing_error(mock_state, mock_wealth_plan_hallucinations):
 
 def test_file_operation_error(mock_state, mock_wealth_plan_hallucinations):
     """Test error handling during file operations"""
-    with patch('hallucination.dump_to_file', side_effect=Exception("File Error")):
+    with patch('wp_Hallucination.dump_to_file', side_effect=Exception("File Error")):
         with pytest.raises(MeetingAssistError) as exc_info:
             wp_validate_hallucination_node(mock_state, "test_chain")
         
@@ -83,8 +84,8 @@ def test_file_operation_error(mock_state, mock_wealth_plan_hallucinations):
 
 def test_hallucination_separation(mock_state, mock_wealth_plan_hallucinations):
     """Test proper separation of hallucinated and non-hallucinated insights"""
-    with patch('hallucination.dump_to_file') as mock_dump, \
-         patch('hallucination.write_logs_to_rds') as mock_write:
+    with patch('wp_Hallucination.dump_to_file') as mock_dump, \
+         patch('wp_Hallucination.write_logs_to_rds') as mock_write:
         
         wp_validate_hallucination_node(mock_state, "test_chain")
         
@@ -103,4 +104,6 @@ def test_hallucination_separation(mock_state, mock_wealth_plan_hallucinations):
             content_type="hallucinated_summaries",
             content=mock_wealth_plan_hallucinations.return_value.model_dump_json(),
             agent_type=str(AgentType.WEALTHPLAN_AGENT)
-        )
+        ) 
+
+
