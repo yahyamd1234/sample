@@ -1,94 +1,92 @@
+Yahya <smaryahya@gmail.com>
+	
+3:35 PM (1 minute ago)
+	
+to Yahya
+
 import pytest
-import json
-from unittest.mock import Mock, patch
-from app.meeting_assist_graph.schemas.input import AdvisorAgentRequest
-from app.meeting_assist_graph.types import AgentType
-from app.meeting_assist_graph.schemas.structured.hallucination import WealthPlan_Hallucinations
+from unittest.mock import MagicMock, patch, call
 from app.meeting_assist_graph.schemas.errors import MeetingAssistError
-from hallucination import wp_validate_hallucination_node
+from app.meeting_assist_graph.state import AdvisorState
+from app.meeting_assist_graph.types import AgentType
+
+# Import the function to test (adjust the import path as needed)
+from app.meeting_assist_graph.hallucination import wp_validate_hallucination_node
 
 @pytest.fixture
 def mock_state():
-    state = Mock()
+    """Fixture to create a mock state object with required attributes."""
+    state = MagicMock(spec=AdvisorState)
+    state.llm_plan_level_model_dump_json.return_value = json.dumps({"plan": "data"})
+    state.llm_goal_level_model_dump_json.return_value = json.dumps({"goal": "data"})
+    state.plan_level_insights_summaries = MagicMock()
+    state.plan_level_insights_summaries.model_dump_json.return_value = json.dumps({"notes": "plan"})
+    state.goal_level_insights_summaries = MagicMock()
+    state.goal_level_insights_summaries.model_dump_json.return_value = json.dumps({"notes": "goal"})
     state.agent_type = AgentType.WEALTHPLAN_AGENT
-    state.advisor_id = "test_advisor"
-    state.package_id = "test_package"
-    state.eci = "test_eci"
-    
-    # Mock plan and goal level data
-    plan_level_data = {
-        "validated_insights_summaries": [
-            {"insight": "test insight 1", "hallucination_flag": True},
-            {"insight": "test insight 2", "hallucination_flag": False}
-        ]
-    }
-    goal_level_data = {
-        "validated_insights_summaries": [
-            {"insight": "test goal 1", "hallucination_flag": True},
-            {"insight": "test goal 2", "hallucination_flag": False}
-        ]
-    }
-    
-    state.llm_plan_level_model_dump_json = lambda: json.dumps(plan_level_data)
-    state.llm_goal_level_model_dump_json = lambda: json.dumps(goal_level_data)
-    
-    # Mock input requests
-    mock_request = AdvisorAgentRequest(
-        advisor_id="test_advisor",
-        package_id="test_package",
-        eci="test_eci"
-    )
-    state.plan_level_insights_summaries = mock_request
-    state.goal_level_insights_summaries = mock_request
-    
+    state.eci = "TEST_ECI"
+    state.package_id = "PKG_123"
+    state.advisor_id = "ADV_456"
     return state
 
-@pytest.mark.parametrize("test_case", [
-    ("success", None),
-    ("no_plan_level", "No insights and summaries in state."),
-    ("no_input_request", "No input request in state.")
-])
-def test_wp_validate_hallucination_node(mock_state, test_case):
-    scenario, expected_error = test_case
-    
-    if scenario == "no_plan_level":
-        mock_state.llm_plan_level_model_dump_json = lambda: "null"
-    elif scenario == "no_input_request":
-        mock_state.plan_level_insights_summaries = None
-    
-    with patch('hallucination.dump_to_file') as mock_dump, \
-         patch('hallucination.write_logs_to_rds') as mock_write_logs:
-        
-        result = wp_validate_hallucination_node(mock_state, "test_chain")
-        
-        if expected_error:
-            assert isinstance(result, MeetingAssistError)
-            assert expected_error in str(result)
-        else:
-            assert result is None
-            # Verify dump_to_file was called
-            assert mock_dump.call_count >= 2
-            # Verify write_logs_to_rds was called
-            assert mock_write_logs.call_count >= 1
+@pytest.fixture
+def mock_hallucination_model():
+    with patch("app.meeting_assist_graph.hallucination.WealthPlan_Hallucinations") as mock:
+        mock_instance = MagicMock()
+        mock_instance.model_dump_json.return_value = json.dumps({"validated_insights_summaries": []})
+        mock.return_value = mock_instance
+        yield mock
 
-def test_hallucination_classification():
-    """Test the classification of hallucinated vs non-hallucinated insights"""
-    test_data = {
-        "validated_insights_summaries": [
-            {"insight": "test1", "hallucination_flag": True},
-            {"insight": "test2", "hallucination_flag": False},
-            {"insight": "test3", "hallucination_flag": True}
-        ]
-    }
-    
-    hallucination = WealthPlan_Hallucinations(input={"notes": "{}", "insights": json.dumps(test_data)})
-    output = {"hallucination_plan_level": hallucination}
-    hallucination_data = json.loads(output['hallucination_plan_level'].model_dump_json())
-    
-    hallucinated = [x for x in hallucination_data["validated_insights_summaries"] 
-                   if x["hallucination_flag"]]
-    non_hallucinated = [x for x in hallucination_data["validated_insights_summaries"] 
-                       if not x["hallucination_flag"]]
-    
-    assert len(hallucinated) == 2
-    assert len(non_hallucinated) == 1
+def test_happy_path(mock_state, mock_hallucination_model, mocker):
+    """Test successful execution with no errors."""
+    mocker.patch("json.loads", return_value={})
+    mock_dump = mocker.patch("app.meeting_assist_graph.hallucination.dump_to_file")
+    mock_write_logs = mocker.patch("app.meeting_assist_graph.hallucination.write_logs_to_rds")
+   
+    result = wp_validate_hallucination_node(mock_state, "test_chain")
+   
+    assert result is True
+    mock_dump.assert_has_calls([
+        call(mock_hallucination_model(), AgentType.WEALTHPLAN_AGENT, "TEST_ECI_intermediate_hallucination_plan_level.json"),
+        call(mock_hallucination_model(), AgentType.WEALTHPLAN_AGENT, "TEST_ECI_intermediate_hallucination_goal_level.json"),
+    ], any_order=True)
+    mock_write_logs.assert_called_once()
+
+def test_missing_plan_level_data(mock_state, mocker):
+    """Test error when plan_level data is missing."""
+    mock_state.llm_plan_level_model_dump_json.return_value = ""
+    mock_handle_error = mocker.patch("app.meeting_assist_graph.hallucination.handle_error")
+   
+    result = wp_validate_hallucination_node(mock_state, "test_chain")
+   
+    mock_handle_error.assert_called_once_with(
+        MeetingAssistError,
+        "INTERNAL_LOGIC_ERROR",
+        "Internal error when retrieving the state['llm_plan_level'] or state['llm_goal_level'].",
+        "Exception: No insights and summaries in state.",
+        mocker.ANY  # logger
+    )
+
+def test_missing_plan_input_request(mock_state, mocker):
+    """Test error when plan_input_request is missing."""
+    mock_state.plan_level_insights_summaries = None
+    mock_handle_error = mocker.patch("app.meeting_assist_graph.hallucination.handle_error")
+   
+    result = wp_validate_hallucination_node(mock_state, "test_chain")
+   
+    mock_handle_error.assert_called_once_with(
+        MeetingAssistError,
+        "INTERNAL_LOGIC_ERROR",
+        "Internal error while preparing plan level insight/summary data to provide input for LLM.",
+        "Exception: No input request in state.",
+        mocker.ANY
+    )
+
+def test_hallucination_model_validation_error(mock_state, mock_hallucination_model, mocker):
+    """Test error during hallucination model validation."""
+    mock_hallucination_model.side_effect = Exception("Validation failed")
+    mock_handle_error = mocker.patch("app.meeting_assist_graph.hallucination.handle_error")
+   
+    result = wp_validate_hallucination_node(mock_state, "test_chain")
+   
+    mock_handle_error
