@@ -1,0 +1,94 @@
+import pytest
+import json
+from unittest.mock import Mock, patch
+from app.meeting_assist_graph.schemas.input import AdvisorAgentRequest
+from app.meeting_assist_graph.types import AgentType
+from app.meeting_assist_graph.schemas.structured.hallucination import WealthPlan_Hallucinations
+from app.meeting_assist_graph.schemas.errors import MeetingAssistError
+from hallucination import wp_validate_hallucination_node
+
+@pytest.fixture
+def mock_state():
+    state = Mock()
+    state.agent_type = AgentType.WEALTHPLAN_AGENT
+    state.advisor_id = "test_advisor"
+    state.package_id = "test_package"
+    state.eci = "test_eci"
+    
+    # Mock plan and goal level data
+    plan_level_data = {
+        "validated_insights_summaries": [
+            {"insight": "test insight 1", "hallucination_flag": True},
+            {"insight": "test insight 2", "hallucination_flag": False}
+        ]
+    }
+    goal_level_data = {
+        "validated_insights_summaries": [
+            {"insight": "test goal 1", "hallucination_flag": True},
+            {"insight": "test goal 2", "hallucination_flag": False}
+        ]
+    }
+    
+    state.llm_plan_level_model_dump_json = lambda: json.dumps(plan_level_data)
+    state.llm_goal_level_model_dump_json = lambda: json.dumps(goal_level_data)
+    
+    # Mock input requests
+    mock_request = AdvisorAgentRequest(
+        advisor_id="test_advisor",
+        package_id="test_package",
+        eci="test_eci"
+    )
+    state.plan_level_insights_summaries = mock_request
+    state.goal_level_insights_summaries = mock_request
+    
+    return state
+
+@pytest.mark.parametrize("test_case", [
+    ("success", None),
+    ("no_plan_level", "No insights and summaries in state."),
+    ("no_input_request", "No input request in state.")
+])
+def test_wp_validate_hallucination_node(mock_state, test_case):
+    scenario, expected_error = test_case
+    
+    if scenario == "no_plan_level":
+        mock_state.llm_plan_level_model_dump_json = lambda: "null"
+    elif scenario == "no_input_request":
+        mock_state.plan_level_insights_summaries = None
+    
+    with patch('hallucination.dump_to_file') as mock_dump, \
+         patch('hallucination.write_logs_to_rds') as mock_write_logs:
+        
+        result = wp_validate_hallucination_node(mock_state, "test_chain")
+        
+        if expected_error:
+            assert isinstance(result, MeetingAssistError)
+            assert expected_error in str(result)
+        else:
+            assert result is None
+            # Verify dump_to_file was called
+            assert mock_dump.call_count >= 2
+            # Verify write_logs_to_rds was called
+            assert mock_write_logs.call_count >= 1
+
+def test_hallucination_classification():
+    """Test the classification of hallucinated vs non-hallucinated insights"""
+    test_data = {
+        "validated_insights_summaries": [
+            {"insight": "test1", "hallucination_flag": True},
+            {"insight": "test2", "hallucination_flag": False},
+            {"insight": "test3", "hallucination_flag": True}
+        ]
+    }
+    
+    hallucination = WealthPlan_Hallucinations(input={"notes": "{}", "insights": json.dumps(test_data)})
+    output = {"hallucination_plan_level": hallucination}
+    hallucination_data = json.loads(output['hallucination_plan_level'].model_dump_json())
+    
+    hallucinated = [x for x in hallucination_data["validated_insights_summaries"] 
+                   if x["hallucination_flag"]]
+    non_hallucinated = [x for x in hallucination_data["validated_insights_summaries"] 
+                       if not x["hallucination_flag"]]
+    
+    assert len(hallucinated) == 2
+    assert len(non_hallucinated) == 1
